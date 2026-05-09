@@ -220,6 +220,30 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   const double &pcl_beg_time = meas.lidar_beg_time;
   const double &pcl_end_time = meas.lidar_end_time;
   
+  // ==================【增加：时间同步诊断日志】==================
+  // 每 100 帧打印一次，防止刷屏
+  static int frame_cnt = 0;
+  if (frame_cnt++ % 100 == 0) {
+      double lidar_duration = pcl_end_time - pcl_beg_time;
+      double imu_lidar_gap = std::abs(imu_beg_time - pcl_beg_time);
+      
+      std::cout << "[Boreas Sync Diagnostic] 第 " << frame_cnt << " 帧:" << std::endl;
+      std::cout << "  - LiDAR 数据包时长: " << lidar_duration * 1000 << " ms" << std::endl;
+      
+      // 检查 LiDAR 时间包络是否健康 (通常 10Hz 是 100ms)
+      if (lidar_duration > 0.15 || lidar_duration < 0.05) {
+          std::cerr << "  🚨 [Boreas 警告] LiDAR 时间戳跨度异常！当前跨度: " << lidar_duration << " 秒！" 
+                    << " (原因: pre_process 里面的 time 字段提取错误！)" << std::endl;
+      }
+
+      // 检查 IMU 和 LiDAR 的时间对其程度
+      if (imu_lidar_gap > 0.1) {
+           std::cerr << "  🚨 [Boreas 致命警告] IMU 和 LiDAR 时间严重不同步！相差: " << imu_lidar_gap << " 秒！"
+                     << " (原因: Python 脚本里的 ROS header.stamp 基准没对齐！系统即将飞车！)" << std::endl;
+      }
+  }
+  // =========================================================
+  
   /*** sort point clouds by offset time ***/
   pcl_out = *(meas.lidar);
   sort(pcl_out.points.begin(), pcl_out.points.end(), time_list);
@@ -364,6 +388,26 @@ void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 
       std::cout << "IMU Initial Done" << std::endl;
       // ROS_INFO("IMU Initial Done: Gravity: %.4f %.4f %.4f %.4f; state.bias_g: %.4f %.4f %.4f; acc covarience: %.8f %.8f %.8f; gry covarience: %.8f %.8f %.8f",\
       //          imu_state.grav[0], imu_state.grav[1], imu_state.grav[2], mean_acc.norm(), cov_bias_gyr[0], cov_bias_gyr[1], cov_bias_gyr[2], cov_acc[0], cov_acc[1], cov_acc[2], cov_gyr[0], cov_gyr[1], cov_gyr[2]);
+      // ==================【增加：硬核诊断日志】==================
+      double acc_norm = mean_acc.norm();
+      std::cout << "\n[Boreas Diagnostic] --- IMU 初始化健康度报告 ---" << std::endl;
+      std::cout << "[Boreas Diagnostic] 1. 静止重力模长 (理想值 ~9.81): " << acc_norm << " m/s^2" << std::endl;
+      
+      if (std::abs(acc_norm - 9.81) > 0.5) {
+          std::cerr << "\n🚨 [Boreas 警告] 重力模长异常！当前值为: " << acc_norm 
+                    << "\n原因可能是: 1. 这不是一个静态起步序列 2. 你的 bag 丢弃了重力信息 3. IMU 单位不是 m/s^2！" << std::endl;
+      }
+
+      std::cout << "[Boreas Diagnostic] 2. 估计出的重力向量 (理想状态 Z应接近 -9.81 或 9.81): \n" << mean_acc.transpose() << std::endl;
+      
+      if (std::abs(mean_acc[0]) > 2.0 || std::abs(mean_acc[1]) > 2.0) {
+          std::cerr << "\n🚨 [Boreas 警告] 发现巨大的侧向加速度！" 
+                    << "\n原因可能是: 1. 车辆在剧烈加速/转弯中起步 2. 你的外参矩阵 (Extrinsic R) 的 Z 轴方向错了！" << std::endl;
+      }
+      
+      std::cout << "[Boreas Diagnostic] 3. 陀螺仪零偏 (理想值应接近 0): \n" << mean_gyr.transpose() << std::endl;
+      std::cout << "------------------------------------------------\n" << std::endl;
+      // =========================================================
       fout_imu.open(DEBUG_FILE_DIR("imu.txt"),ios::out);
     }
 

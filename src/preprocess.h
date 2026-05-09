@@ -164,8 +164,8 @@ class Preprocess
 
   // sensor_msgs::PointCloud2::ConstPtr pointcloud;
   PointCloudXYZI pl_full, pl_corn, pl_surf;
-  PointCloudXYZI pl_buff[128]; //maximum 128 line lidar
-  vector<orgtype> typess[128]; //maximum 128 line lidar
+  PointCloudXYZI pl_buff[150]; //maximum 128 line lidar
+  vector<orgtype> typess[150]; //maximum 128 line lidar
   float time_unit_scale;
   int lidar_type, point_filter_num, N_SCANS, SCAN_RATE, time_unit;
   double blind;
