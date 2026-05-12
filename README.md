@@ -197,3 +197,16 @@ The main structure of this UAV is 3d printed (Aluminum or PLA), the .stl file wi
 ## 6.Acknowledgments
 
 Thanks for LOAM(J. Zhang and S. Singh. LOAM: Lidar Odometry and Mapping in Real-time), [Livox_Mapping](https://github.com/Livox-SDK/livox_mapping), [LINS](https://github.com/ChaoqinRobotics/LINS---LiDAR-inertial-SLAM) and [Loam_Livox](https://github.com/hku-mars/loam_livox).
+
+## 7.Experience
+```bash
+ros2 launch fast_lio mapping.launch.py config_file:=velodyne.yaml use_sim_time:=true
+ros2 bag play /media/zzhe/T7/datasets/boreas-2021-06-03-16-00_bag/ --clock
+ros2 bag record /Odometry -o fast_lio_traj_bag
+evo_traj bag2 fast_lio_traj_bag /Odometry --save_as_tum
+evo_rpe tum ground_truth.tum Odometry.tum -va --plot --delta 100 --delta_unit m --all_pairs -r point_distance --t_max_diff 0.1
+evo_ape tum ground_truth.tum Odometry.tum -va --plot --align --t_max_diff 0.1
+evo_traj tum Odometry.tum --ref ground_truth.tum -p --plot_mode=xy -a --t_max_diff 0.1
+```
+2021-06-03-16-00序列是晴天
+2021-07-20-17-33序列是雨天

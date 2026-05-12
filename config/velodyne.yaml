@@ -24,7 +24,7 @@
             scan_line: 128
             scan_rate: 10                # only need to be set for velodyne, unit: Hz,
             timestamp_unit: 0            # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
-            blind: 2.0
+            blind: 4.0
 
         mapping:
             acc_cov: 0.1
@@ -41,10 +41,10 @@
             #               -2.035826e-03, -1.482298e-02,  9.998881e-01]
 
             #boreas
-            extrinsic_T: [ 0.0, 0.0, 0.13 ]
+            extrinsic_T: [ 0.0, 0.0, 0.13  ]
             extrinsic_R: [ 0.736055565149313, -0.676921121708399, 0.0,
-                           0.676921121708399,  0.736055565149313, 0.0,
-                           0.0,                0.0,               1.0 ]
+               0.676921121708399,  0.736055565149313, 0.0,
+               0.0,                0.0,               1.0 ]
 
         publish:
             path_en:  true
