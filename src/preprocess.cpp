@@ -1,7 +1,8 @@
 #include "preprocess.h"
 
 #include <pcl/common/common.h>
-
+#include <cmath>
+#include <algorithm>
 #define RETURN0 0x00
 #define RETURN0AND1 0x10
 
@@ -30,6 +31,12 @@ Preprocess::Preprocess() : feature_enabled(0), lidar_type(AVIA), blind(0.01), po
   jump_down_limit = cos(jump_down_limit / 180 * M_PI);
   cos160 = cos(cos160 / 180 * M_PI);
   smallp_intersect = cos(smallp_intersect / 180 * M_PI);
+  // ==================【修正 1：防止未初始化内存变成 NaN】==================
+    enable_physical_prior = true;
+    gamma_k = 2.15;
+    gamma_theta = 2.38;
+    gamma_rho = 1.0;
+// =========================================================================
 }
 
 Preprocess::~Preprocess()
@@ -466,7 +473,44 @@ void Preprocess::velodyne_handler(const sensor_msgs::msg::PointCloud2::UniquePtr
       {
         if (added_pt.x * added_pt.x + added_pt.y * added_pt.y + added_pt.z * added_pt.z > (blind * blind))
         {
+          // pl_surf.points.push_back(added_pt);
+          //=====我的替换=====
+          double W_i = 1.0; 
+          if (enable_physical_prior) 
+          {
+              // 1. 计算欧氏距离 r
+              double r = std::sqrt(added_pt.x * added_pt.x + added_pt.y * added_pt.y + added_pt.z * added_pt.z);
+              
+              // 2. 计算伽马分布 f_r(r)
+              double gamma_k_val = std::tgamma(gamma_k); 
+              double f_r = (1.0 / (gamma_k_val * std::pow(gamma_theta, gamma_k))) * std::pow(r, gamma_k - 1.0) * std::exp(-r / gamma_theta);
+              
+              // 3. 计算距离衰减权重 alpha_i
+              double alpha_i = (gamma_rho * f_r) / (gamma_rho * f_r + 1.0);
+              // 4. 计算强度惩罚 h_i (极其强壮的归一化)
+              // 注意：WADS(Ouster)的强度上限较高，你可以根据数据集在这里改。
+              // 为了普适性，我们设置一个动态上限保护
+              double max_intensity = 255.0; 
+              if (lidar_type == OUST64) {
+                  max_intensity = 2000.0; // Ouster 雷达的常见大强度阈值
+              }
+              
+              double i_norm = added_pt.intensity / max_intensity;
+              
+              // 强制钳位 (Clamping)，绝对不允许 i_norm 跑出 0~1 的范围
+              i_norm = std::max(0.0, std::min(1.0, i_norm));
+              double h_i = 1.0 - i_norm;
+              
+              // 5. 最终置信度
+              W_i = 1.0 - alpha_i * h_i;
+          }
+          // 将置信度巧妙存入 normal_x，法向量其他维度置0防止干扰
+          added_pt.normal_x = W_i; 
+          added_pt.normal_y = 0.0;
+          added_pt.normal_z = 0.0;
+          
           pl_surf.points.push_back(added_pt);
+          //=====替换结束=====
         }
       }
     }

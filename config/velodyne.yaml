@@ -3,11 +3,33 @@
         feature_extract_enable: false
         point_filter_num: 4
         max_iteration: 3
-        filter_size_surf: 0.5
+        filter_size_surf: 0.5           # 原参数复用：精细滤波尺寸 (高置信度)
         filter_size_map: 0.5
-        cube_side_length: 1000.0
-        runtime_pos_log_enable: false
+        cube_side_length: 1000.0      #原版参数
+        runtime_pos_log_enable: true
         map_file_path: "./test.pcd"
+        # --------------------------------------------------------------------
+        # [Section 1: 创新点一 - 物理先验权重计算 (W_i)]
+        # --------------------------------------------------------------------
+        enable_physical_prior: true    # [消融开关] 是否开启物理先验计算 (若为false，则所有点 Wi=1.0)
+        gamma_k: 2.15                   # Gamma分布形状参数 (针对雨雪粒子距离分布建模)
+        gamma_theta: 2.38               # Gamma分布尺度参数
+        gamma_rho: 50.0                  # 距离衰减权重调节因子 (控制距离惩罚的强度)
+
+        # --------------------------------------------------------------------
+        # [Section 2: 创新点二 - 前端双重降采样 (基于置信度筛选)]
+        # --------------------------------------------------------------------
+        enable_dual_downsample: true    # [消融开关] 是否开启双重体素降采样
+        wi_threshold: 0.5               # 分类阈值：Wi <= 0.5 的点被视为疑似雨雪，进入粗糙滤波
+        filter_size_surf_coarse: 1.5    # 粗糙体素滤波尺寸：大尺寸滤波可天然过滤稀疏的悬浮雨雪粒子
+
+        # --------------------------------------------------------------------
+        # [Section 3: 创新点三 - 变分贝叶斯自适应后端 (VB-AKF)]
+        # --------------------------------------------------------------------
+        enable_vb_akf: false             # [消融开关] 是否开启变分贝叶斯观测噪声自适应更新
+        vb_alpha_0: 1.5                 # VB超参数 alpha：控制噪声估计的灵敏度 (建议取值 1.1 ~ 2.5)
+        vb_r_default: 0.001             # 硬件标称残差方差：雷达测距的固有噪声水平
+        vb_epsilon: 1e-6                # 数值稳定性项：防止 Wi 为 0 时导致除零错误
 
         common:
             lid_topic:  "/velodyne_points"
@@ -24,7 +46,7 @@
             scan_line: 128
             scan_rate: 10                # only need to be set for velodyne, unit: Hz,
             timestamp_unit: 0            # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
-            blind: 4.0
+            blind: 1.0
 
         mapping:
             acc_cov: 0.1

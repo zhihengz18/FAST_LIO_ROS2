@@ -171,7 +171,12 @@ class Preprocess
   double blind;
   bool feature_enabled, given_offset_time;
   // ros::Publisher pub_full, pub_surf, pub_corn;
-
+  // === [VB-AKF-LIO 物理先验参数] ===
+    bool enable_physical_prior;
+    double gamma_k;
+    double gamma_theta;
+    double gamma_rho;
+  // ==================================
 private:
   void avia_handler(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg);
   void oust64_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);

@@ -98,7 +98,20 @@ bool   point_selected_surf[100000] = {0};
 bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
 bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
 bool    is_first_lidar = true;
-
+//=======我的修改======
+bool enable_dual_downsample = true;
+bool enable_vb_akf = true;
+double vb_alpha_0 = 2.0;
+double vb_r_default = 0.001;
+double vb_epsilon = 1e-6;
+double wi_threshold = 0.5;
+double filter_size_surf_coarse = 1.5;
+pcl::VoxelGrid<PointType> downSizeFilterSurf_Coarse; // 粗糙滤波器
+pcl::PointCloud<PointType>::Ptr high_confidence_cloud(new pcl::PointCloud<PointType>());
+pcl::PointCloud<PointType>::Ptr low_confidence_cloud(new pcl::PointCloud<PointType>());
+pcl::PointCloud<PointType>::Ptr high_filtered(new pcl::PointCloud<PointType>());
+pcl::PointCloud<PointType>::Ptr low_filtered(new pcl::PointCloud<PointType>());
+//====================
 vector<vector<int>>  pointSearchInd_surf; 
 vector<BoxPointType> cub_needrm;
 vector<PointVector>  Nearest_Points; 
@@ -789,6 +802,60 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
 
         /*** Measuremnt: distance to the closest surface/corner ***/
         ekfom_data.h(i) = -norm_p.intensity;
+// ==================【最终版：VB-AKF-LIO 相对权重自适应更新 ==================
+        if (enable_vb_akf) 
+        {
+            // 1. 获取前端计算的物理置信度 Wi
+            double Wi = laser_p.normal_x;
+
+            // 🚨 防御装甲 A：如果前端传来了 NaN 或 Inf（未初始化垃圾值），强制恢复为安全值
+            if (std::isnan(Wi) || std::isinf(Wi)) {
+                Wi = 1.0; 
+            }
+            
+            // 安全钳位，确保置信度在合法范围内，防止极小值导致除零
+            Wi = std::max(0.001, std::min(1.0, Wi));
+
+            // 2. 获取当前点到平面的距离残差 e_j
+            double e_j = ekfom_data.h(i);
+
+            // 3. 计算 VB 动态先验 beta_0
+            double beta_0 = (vb_alpha_0 - 1.0) * (vb_r_default / (Wi + vb_epsilon));
+
+            // 4. 计算自适应观测噪声方差 R_hat
+            double R_adaptive = (beta_0 + 0.5 * e_j * e_j) / (vb_alpha_0 - 0.5);
+
+            // 5. 计算原始相对权重系数
+            double weight = std::sqrt(vb_r_default / R_adaptive);
+            
+            // 🚨🚨 防御装甲 C：防止“早熟拒绝”导致系统爆炸发散 🚨🚨
+            // 物理置信度越高的好点，越不允许因为初始的大残差被误杀。
+            // 比如 Wi=1 的好点，即使残差再大，也会强制保留 0.8 的权重给优化器提供收敛梯度；
+            // 而 Wi=0.1 的纯雪花，保底只有 0.08，依然会被 VB 机制无情抛弃。
+            double min_weight = Wi * 0.8; 
+            weight = std::max(min_weight, weight);
+            
+            // 🚨 防御装甲 B：防止开方计算中偶发的异常引发 NaN
+            if (std::isnan(weight) || std::isinf(weight)) {
+                weight = 1.0;
+            }
+
+            // 权重上限钳位，代表最信任程度不超过原版标称
+            if (weight > 1.0) weight = 1.0;
+
+// ==================【诊断日志 2：后端数学观测】==================
+            // 我们只抓取 i == 0 （每帧的第一个有效配准点）的计算过程进行抽样观察
+            if (i == 0) {
+                printf("2. [后端数学] 抽样点 0 - Wi: %.4f | 残差 e: %.4f | Beta0: %.6f | R_hat: %.6f | 最终权重: %.4f\n", 
+                       Wi, e_j, beta_0, R_adaptive, weight);
+            }
+// =========================================================================
+
+            // 6. 同时对雅可比矩阵行和残差进行自适应加权
+            ekfom_data.h_x.row(i) *= weight;
+            ekfom_data.h(i) *= weight;
+        }
+// ==================【替换结束】=============================================
     }
     solve_time += omp_get_wtime() - solve_start_;
 }
@@ -833,7 +900,44 @@ public:
         this->declare_parameter<int>("pcd_save.interval", -1);
         this->declare_parameter<vector<double>>("mapping.extrinsic_T", vector<double>());
         this->declare_parameter<vector<double>>("mapping.extrinsic_R", vector<double>());
+        //======我的修改=====
+        this->declare_parameter<bool>("enable_physical_prior", true);
+        this->declare_parameter<double>("gamma_k", 2.15);
+        this->declare_parameter<double>("gamma_theta", 2.38);
+        this->declare_parameter<double>("gamma_rho", 1.0);
 
+        this->declare_parameter<bool>("enable_dual_downsample", true);
+        this->declare_parameter<double>("wi_threshold", 0.5);
+        this->declare_parameter<double>("filter_size_surf_coarse", 1.5);
+        this->declare_parameter<bool>("enable_vb_akf", true);
+        this->declare_parameter<double>("vb_alpha_0", 2.0);
+        this->declare_parameter<double>("vb_r_default", 0.001);
+        this->declare_parameter<double>("vb_epsilon", 1e-6);
+        // 获取参数
+        bool enable_physical_prior;
+        double gamma_k, gamma_theta, gamma_rho;
+
+        this->get_parameter("enable_physical_prior", enable_physical_prior);
+        this->get_parameter("gamma_k", gamma_k);
+        this->get_parameter("gamma_theta", gamma_theta);
+        this->get_parameter("gamma_rho", gamma_rho);
+
+        this->get_parameter("enable_dual_downsample", enable_dual_downsample);
+        this->get_parameter("wi_threshold", wi_threshold);
+        this->get_parameter("filter_size_surf_coarse", filter_size_surf_coarse);
+        this->get_parameter("enable_vb_akf", enable_vb_akf);
+        this->get_parameter("vb_alpha_0", vb_alpha_0);
+        this->get_parameter("vb_r_default", vb_r_default);
+        this->get_parameter("vb_epsilon", vb_epsilon);
+        // 初始化粗糙滤波器
+        downSizeFilterSurf_Coarse.setLeafSize(filter_size_surf_coarse, filter_size_surf_coarse, filter_size_surf_coarse);
+
+        // 【关键步】：将读取的参数传给预处理模块 p_pre
+        p_pre->enable_physical_prior = enable_physical_prior;
+        p_pre->gamma_k = gamma_k;
+        p_pre->gamma_theta = gamma_theta;
+        p_pre->gamma_rho = gamma_rho;
+        //============================================
         this->get_parameter_or<bool>("publish.path_en", path_en, true);
         this->get_parameter_or<bool>("publish.effect_map_en", effect_pub_en, false);
         this->get_parameter_or<bool>("publish.map_en", map_pub_en, false);
@@ -992,11 +1096,65 @@ private:
             lasermap_fov_segment();
 
             /*** downsample the feature points in a scan ***/
-            downSizeFilterSurf.setInputCloud(feats_undistort);
-            downSizeFilterSurf.filter(*feats_down_body);
+            // downSizeFilterSurf.setInputCloud(feats_undistort);
+            // downSizeFilterSurf.filter(*feats_down_body);
+            // ==================【替换开始：VB-AKF-LIO 双重降采样 (支持消融)】==================
+            /*** downsample the feature points in a scan ***/
+            if (enable_dual_downsample) 
+            {
+                // 【核心修正：内存复用，每次循环只需清空历史点，绝不重新 new】
+                high_confidence_cloud->clear();
+                low_confidence_cloud->clear();
+                high_filtered->clear();
+                low_filtered->clear();
+
+                // 1. 根据 Wi 分流点云 (normal_x 中存着 W_i)
+                for (size_t i = 0; i < feats_undistort->points.size(); ++i) {
+                    if (feats_undistort->points[i].normal_x > wi_threshold) {
+                        high_confidence_cloud->points.push_back(feats_undistort->points[i]);
+                    } else {
+                        low_confidence_cloud->points.push_back(feats_undistort->points[i]);
+                    }
+                }
+
+                // 2. 原有的精细滤波器处理高置信度点 
+                if (!high_confidence_cloud->empty()) {
+                    downSizeFilterSurf.setInputCloud(high_confidence_cloud);
+                    downSizeFilterSurf.filter(*high_filtered);
+                }
+
+                // 3. 粗糙滤波器处理疑似雨雪噪点 
+                if (!low_confidence_cloud->empty()) {
+                    downSizeFilterSurf_Coarse.setInputCloud(low_confidence_cloud);
+                    downSizeFilterSurf_Coarse.filter(*low_filtered);
+                }
+
+                // 4. 合并降采样后的点云
+                feats_down_body->clear();
+                *feats_down_body += *high_filtered;
+                *feats_down_body += *low_filtered;
+// ==================【诊断日志 1：前端除雪比例】==================
+                static int frame_cnt = 0;
+                if (frame_cnt % 20 == 0) { // 每 20 帧打印一次，防止刷屏
+                    std::cout << "\n--- [VB-AKF Diagnostic] Frame " << frame_cnt << " ---" << std::endl;
+                    std::cout << "1. [前端] 总点数: " << feats_undistort->points.size() 
+                              << " | 高置信度(>0.5): " << high_confidence_cloud->points.size() 
+                              << " | 疑似雨雪(<=0.5): " << low_confidence_cloud->points.size() << std::endl;
+                }
+                frame_cnt++;
+// =========================================================================
+            } 
+            else 
+            {
+                // 消融实验：如果关闭双重滤波，则走 FAST-LIO2 原始的一刀切单次滤波
+                downSizeFilterSurf.setInputCloud(feats_undistort);
+                downSizeFilterSurf.filter(*feats_down_body);
+            }
+            // ==================【替换结束】=================================================
             t1 = omp_get_wtime();
             feats_down_size = feats_down_body->points.size();
             /*** initialize the map kdtree ***/
+
             if(ikdtree.Root_Node == nullptr)
             {
                 RCLCPP_INFO(this->get_logger(), "Initialize the map kdtree");
